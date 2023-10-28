@@ -23,7 +23,7 @@ def main():
     """
     Skim svn status output to dealing with filename issue on macOS. 
     """
-    argpsr = argparse.ArgumentParser(description='Example: showing greeting words')
+    argpsr = argparse.ArgumentParser(description='Skim svn status output to dealing with filename issue on macOS.')
     argpsr.add_argument('svnarguments', nargs='*', type=str, default=[],  help='Arguments for svn command')
     argpsr.add_argument('-v', '--verbose', action='store_true', help='Show verbose output')
     argpsr.add_argument('-i', '--ignore-pattern', action='append', help='Add file name pattern to ignore (regular expression)')
