@@ -15,7 +15,7 @@ import argparse
 
 def unicode_norm_filechk(path):
     for frm in ['NFC','NFKC','NFD','NFKD']: 
-        if os.path.exists(unicodedata.is_normalized(frm, path)):
+        if os.path.exists(unicodedata.normalize(frm, path)):
             return True
     return False
 
