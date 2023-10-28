@@ -1,0 +1,1011 @@
+#!/bin/bash
+#
+# runpyscr
+#   : Utility for python script to run with modules installed locally.
+#     by Nanigashi Uji (53845049+nanigashi-uji@users.noreply.github.com)
+#
+this="${BASH_SOURCE:-${0}}"
+runas="$(basename "${this}")"
+#
+# Shell variables for configurations
+#
+# Python version when it is not automatically identified
+#python_major_version_default=2
+python_major_version_default=3
+#
+bin_subdir="bin"
+script_subdir="lib/python"
+module_subdir="site-packages"
+module_manage_name="mng_pyenv"
+readme_name="README.md"
+gitdummyfile=".gitkeep"
+managemodeoptarg="--manage"
+#
+# Checking python
+#
+python_cmd="${PYTHON}"
+function chk_python_arg () {
+    while [ $# -gt 1 ]; do
+    if [ "$1" == "-P" ] ; then
+        python_cmd="$2"
+        break
+    fi
+    shift
+    done
+}
+
+cmdopt_pyver=
+runas_pyver=
+if [ "${runas: -1:1}" == "2" -o "${runas: -1:1}" == "3" ]; then
+    runas_pyver="${runas: -1:1}"
+fi
+
+runmode=0
+case "${runas}" in
+    ${module_manage_name}|${module_manage_name}[23])
+        runmode=1
+        chk_python_arg "$@"
+        for _i in "$@"; do
+            if [ "${_i}" == "-2" -o "${_i}" == "-3" ]; then
+                cmdopt_pyver="${_i: -1:1}"
+            fi
+        done
+        ;;
+    *)
+        :
+esac
+
+if [ -z "${python_cmd}" ]; then
+    chk_pymjrver="${runas_pyver:-${cmdopt_pyver:-${python_major_version_default}}}"
+    for _i in "python${chk_pymjrver}" $(${FIND:-find} ${PATH//:/ } -maxdepth 1 \( -type f -o -type l \) \( -name "python${chk_pymjrver}.?" -o -name "python${chk_pymjrver}.??" \) 2> /dev/null | "${SED:-sed}" -Ee 's/^.*\///' | "${SORT:-sort}" -r -V) "python" ; do
+        if command -v "${_i}" 1> /dev/null 2>&1 ; then
+            python_cmd="${_i}"
+            break
+        fi
+    done
+    if [ -z "${python_cmd}" ]; then
+        exec echo "Error: Can not find avaiable python" 1>&2
+    fi
+fi
+
+if [ -f "${python_cmd}" -a -x  "${python_cmd}" ]; then
+    python_path="${python_cmd}"
+else
+    python_path="$(command -v "${python_cmd}")" || exec echo "Error: Can not find ${python_cmd} in PATH." 1>&2
+fi
+
+py_mjrver=$("${python_path}" -c 'import sys; print(sys.version_info[0])')
+
+#
+# Check realpath
+#
+# Assuming GNU realpath (coreutils) is installed as "grealpath" in OSX (by macports, etc).
+#
+if command -v "realpath" 1>/dev/null 2>&1 ; then
+    _realpathcmd="realpath"
+elif command -v -s "grealpath"  1>/dev/null 2>&1 ; then
+    _realpathcmd="grealpath"
+else
+    _realpathcmd="pyrealpath"
+    function pyrealpath () {
+        "${python_cmd}" -c "import os.path;print(os.path.realpath('""$1""'))"
+    }
+fi
+
+rp_this="$("${_realpathcmd}" "${this}")"
+if [ -L "${this}" -a "x${rp_this##*/}" != "x${runas}" ]; then
+    flgslnk=1
+fi
+
+if [ "x${rp_this##*/}" == "x${runas}" -a "${1:-x}" == "${managemodeoptarg}" ]; then
+    runmode=1
+    managemodeopt="${1}"
+    shift
+else
+    managemodeopt=""
+fi
+
+
+if [ "x${this:0:1}" == "x/" ]; then
+    this_path="${this}"
+elif [ "x${this:0:2}" == "x./" ]; then
+    this_path="${PWD}/${this:2}"
+else
+    this_path="${PWD}/${this}"
+fi
+
+this_loc_path="$(dirname "${this_path}")"
+this_loc_dir="$(basename "${this_loc_path%/}")"
+
+if [ "x${this_loc_dir}" == "x${bin_subdir}" ]; then
+    flg_inplace=1
+    prefix="$(dirname "${this_loc_path%/}")"
+else
+    flg_inplace=0
+    prefix="${PWD}"
+fi
+
+if [ ${runmode:-0} -eq 1 ]; then
+
+    opt_help=0
+    opt_move=0
+    subcmd=""
+    opt_verbose=0
+    opt_dryrun=0
+    subcmd_args=
+    pip_cmd="${PIP}"
+    opt_git=0
+    opt_modreadme=0
+    opt_keepreadmebak=0
+    opt_projtitle=""
+    opt_pyopt_ver="${python_major_version_default:-3}"
+    opt_module_install=()
+    function chk_opts () {
+        OPT=""
+        OPTARG=""
+        OPTIND=""
+        if [ "${runas: -1:1}" != "2" -a "${runas: -1:1}" != "3" ]; then
+        optchoice="p:i:gGMrRnvqht:kKm:23"
+    else
+        optchoice="p:i:gGMrRnvqht:kKm:"
+    fi
+        while getopts "${optchoice}" OPT ; do
+            case ${OPT} in
+                p) prefix="${OPTARG}"
+                   rp_prefix="$("${_realpathcmd}" "${prefix}")"
+                   if [ "${rp_prefix%/}/bin" == "${this_loc_path%/}" ]; then
+                       flg_inplace=1
+                   else
+                       flg_inplace=0
+                   fi
+                   ;;
+                i) pip_cmd="${OPTARG}"
+                   ;;
+                t) opt_projtitle="${OPTARG}"
+                   ;;
+                h) opt_help=1
+                   ;;
+                M) opt_move=1
+                   ;;
+                v) opt_verbose=1
+                   ;;
+                q) opt_verbose=0
+                   ;;
+                n) opt_dryrun=1
+                   ;;
+                g) opt_git=1
+                   ;;
+                G) opt_git=0
+                   ;;
+                r) opt_modreadme=1
+                   ;;
+                R) opt_modreadme=0
+                   ;;
+                k) opt_keepreadmebak=1
+                   ;;
+                K) opt_keepreadmebak=0
+                   ;;
+                m) opt_module_install=( "${opt_module_install[@]}" "${OPTARG}" )
+                   ;;
+                2) if [ "${runas: -1:1}" != "2" -a "${runas: -1:1}" != "3" ]; then
+               opt_pyopt_ver=2
+           fi
+                   ;;
+                3) if [ "${runas: -1:1}" != "2" -a "${runas: -1:1}" != "3" ]; then
+               opt_pyopt_ver=3
+           fi
+                   ;;
+                \?)
+                    ::
+                ;;
+            esac
+        done
+        shift $((OPTIND - 1))
+        subcmd="${1}"
+        shift
+        subcmd_args=("$@")
+    }
+    #
+    chk_opts "$@"
+
+    function echo_usage () {
+        echo "[Usage]        % ${module_manage_name}{,2,3}       [options] sub-command [arguments]"
+        echo "               % ${rp_this##*/} ${managemodeoptarg} [options] sub-command [arguments]"
+        echo "[sub-commands] "
+        echo "               % ${runas} ${managemodeopt} [options] init [scriptnames] ... setup directory tree,"
+        echo "                                                                        and prepare templates if arguments are given."
+        echo "               % ${runas} ${managemodeopt} [options] add script_names   ... prepare python script templates."
+        echo "               % ${runas} ${managemodeopt} install  module_names        ... Install python module with pip locally."
+        echo "               % ${runas} ${managemodeopt} download module_names        ... Download python module with pip locally."
+        echo "               % ${runas} ${managemodeopt} clean                        ... Delete local python module for corresponding python version."
+        echo "               % ${runas} ${managemodeopt} distclean/cleanall/allclean  ... Delete local python module for all python version."
+        echo "               % ${runas} ${managemodeopt} info                         ... Show information."
+
+        echo "[Options]"
+        echo "               -h     : Show this message"
+        echo "               -P arg : specify python command / path"
+        echo "               -v     : Show verbose messages"
+        echo "               -q     : Supress verbose messages (default)"
+        echo "               -n     : Dry-run mode."
+        if [ "${runas: -1:1}" != "2" -a "${runas: -1:1}" != "3" ]; then
+            echo "               -2     : Prioritize Python2 than Python3"
+            echo "               -3     : Prioritize Python3 than Python2"
+        fi
+        echo "[Options for sub-command: setup/init ]"
+        echo "               -p     : prefix of the directory tree. (Default: Grandparent directory if the name of parent directory of "
+        echo "                        ${runas} is ${bin_subdir}, otherwise current working directory.)"
+        echo "               -M     : moving this script body into instead of copying"
+        echo "               -g     : setup files for git"
+        echo "               -G     : do not setup files for git (default)"
+        echo "               -r     : setup/update ${readme_name:-README.md}"
+        echo "               -R     : do not setup/update ${readme_name:-README.md} (default)"
+        echo "               -k     : keep backup file of ${readme_name:-README.md} when it is updated."
+        echo "               -K     : do not keep backup file of ${readme_name:-README.md} when it is updated. (default)"
+        echo "               -t arg : Project title"
+        echo "[Options for sub-command: install/download ]"
+        echo "               -i arg : specify pip command"
+
+    }
+
+    if [ ${opt_help:-0} -ne 0 ]; then
+        echo_usage
+        exit 0
+    fi
+
+    bindir="${prefix%/}/${bin_subdir%/}"
+    script_dir="${prefix%/}/${script_subdir%/}"
+    module_dir="${script_dir%/}/${module_subdir%/}"
+    #
+    # Checking pip_cmd
+    #
+    if [ -z "${pip_cmd}" ]; then
+        chk_pymjrver="${runas_pyver:-${cmdopt_pyver:-${python_major_version_default}}}"
+        for _i in "pip${chk_pymjrver}" $(${FIND:-find} ${PATH//:/ } -maxdepth 1 \( -type f -o -type l \) \( -name "pip?${chk_pymjrver}.?" -o -name "pip?${chk_pymjrver}.??" \) 2> /dev/null | "${SED:-sed}" -Ee 's/^.*\///' | "${SORT:-sort}" -r -V) "pip" ; do
+            if command -v "${_i}" 1>/dev/null 2>&1 ; then
+                pip_cmd="${_i}"
+                break
+            fi
+        done
+        if [ -z "${pip_cmd}" ]; then
+            exec echo "Error: Can not find avaiable pip" 1>&2
+        fi
+    fi
+
+    if [ -f "${pip_cmd}" -a -x  "${pip_cmd}" ]; then
+        pip_path="${pip_cmd}"
+    else
+        pip_path="$(command -v "${pip_cmd}")" || exec echo "Error: Can not find ${pip_cmd} in PATH." 1>&2
+    fi
+    pip_pyver="$("${pip_path}" -V)"
+    pip_pyver="${pip_pyver#*(python }"
+    pip_pyver="${pip_pyver%)}"
+
+    case "${subcmd}" in
+        init|setup|add)
+            if [ "${subcmd}" == "init" -o "${subcmd}" == "setup" ]; then
+                dest_this_script="${bindir%/}/$(basename "${rp_this}")"
+                if [ ${opt_verbose:-0} -ne 0 ]; then
+                    echo "Initialize working directory : ${prefix}"
+                    echo "mkdir -p ${bindir}"
+                    echo "mkdir -p ${script_dir}"
+                    echo "mkdir -p ${module_dir}"
+                    echo "if [ -e \"${dest_this_script}\" ]; then"
+                    echo "    if diff -q \"${dest_this_script}\" \"${rp_this}\" 1>/dev/null; then"
+                    echo "        echo \"File already exist(skipped): ${dest_this_script}\""
+                    echo "    else"
+                    echo "        mv -i \"${dest_this_script}\" \"${dest_this_script}.\$(date -r \"${dest_this_script}\" +\"%Y%m%d_%H%M%S\"\).bak\""
+                    echo "        if [ ${opt_move:-0} -ne 0 ]; then"
+                    echo "            mv -i \"${rp_this}\" \"${dest_this_script}\""
+                    echo "        else"
+                    echo "            cp -ai \"${rp_this}\" \"${dest_this_script}\""
+                    echo "        fi"
+                    echo "    fi"
+                    echo "elif [ ${flg_inplace:-0} -eq 0 ]; then"
+                    echo "    if [ ${opt_move:-0} -ne 0 ]; then"
+                    echo "        mv -i \"${rp_this}\" \"${dest_this_script}\""
+                    echo "    else"
+                    echo "        cp -ai \"${rp_this}\" \"${dest_this_script}\""
+                    echo "    fi"
+                    echo "fi"
+                    echo "for _i in \"${module_manage_name}\" \"${module_manage_name}\"{2,3}; do"
+                    echo "    if [ -e \"${bindir%/}/\${_i}\" ]; then"
+                    echo "        :"
+                    echo "    else"
+                    echo "        (cd \"${bindir%/}\" && ln -is $(basename "${dest_this_script}") \"\${_i}\")"
+                    echo "    fi"
+                    echo "done"
+                    echo "if [ ${opt_git:-0} -ne 0 ]; then"
+                    echo "    if [ ! -e \"${prefix}/.gitignore\" ]; then"
+                    echo "        gitignore_template_header='^#{1,} *__gitignore_template_start__ *#{1,}.*$'"
+                    echo "        gitignore_template_footer='^#{1,} *__gitignore_template_end__ *#{1,}.*$'"
+                    echo "        \"${SED:-sed}\" -nE -e '/'\"\${gitignore_template_header}\"'/,/'\"\${gitignore_template_footer}\"'/ {/('\"\${gitignore_template_header}\"'|'\"\${gitignore_template_footer}\"')/ d; s/__GIT_DUMMYNAME__/${gitdummyfile}/g; p; }' \"${rp_this}\" 1> \"${prefix}/.gitignore\""
+                    echo "    fi"
+                    echo "    if [ ! -e \"${module_dir}${gitdummyfile}\" ]; then"
+                    echo "        touch \"${module_dir}${gitdummyfile}\""
+                    echo "    fi"
+                    echo "fi"
+                fi
+                if [ ${opt_dryrun:-0} -eq 0 ]; then
+                    mkdir -p "${bindir}"
+                    mkdir -p "${script_dir}"
+                    mkdir -p "${module_dir}"
+                    if [ ${flg_inplace:-0} -eq 0 -a -e "${dest_this_script}" ]; then
+                        if diff -q "${dest_this_script}" "${rp_this}" 1>/dev/null; then
+                            echo "File already exist: ${dest_this_script}"
+                        else
+                            mv -i "${dest_this_script}" "${dest_this_script}.$(date -r "${dest_this_script}" +"%Y%m%d_%H%M%S").bak"
+                            if [ ${opt_move:-0} -ne 0 ]; then
+                                mv -i "${rp_this}" "${dest_this_script}"
+                            else
+                                cp -ai "${rp_this}" "${dest_this_script}"
+                                chmod guo+rX "${dest_this_script}"
+                            fi
+#                            if [ "${OSTYPE:-unknown}" == "darwin" ]; then
+#                                "${dest_this_script}" --manage -h  1>/dev/null
+#                            fi
+                        fi
+                    elif [ ${flg_inplace:-0} -eq 0 ]; then
+                        if [ ${opt_move:-0} -ne 0 ]; then
+                            mv -i "${rp_this}" "${dest_this_script}"
+                        else
+                            cp -ai "${rp_this}" "${dest_this_script}"
+                            chmod guo+rX "${dest_this_script}"
+                        fi
+#                        if [ "${OSTYPE:-unknown}" == "darwin" ]; then
+#                            "${dest_this_script}" --manage -h 1> /dev/null
+#                        fi
+                    fi
+
+                    for _i in "${module_manage_name}" "${module_manage_name}"{2,3}; do
+                        if [ -e "${bindir%/}/${_i}" ]; then
+                            :
+                        else
+                            (cd "${bindir%/}" && ln -is "$(basename "${dest_this_script}")" "${_i}")
+                        fi
+                    done
+                    
+                    if [ ${opt_git:-0} -ne 0 ]; then
+                        if [ ! -e "${prefix}/.gitignore" ]; then
+                            gitignore_template_header='^#{1,} *__gitignore_template_start__ *#{1,}.*$'
+                            gitignore_template_footer='^#{1,} *__gitignore_template_end__ *#{1,}.*$'
+                            "${SED:-sed}" -nE -e '/'"${gitignore_template_header}"'/,/'"${gitignore_template_footer}"'/ {/('"${gitignore_template_header}"'|'"${gitignore_template_footer}"')/ d; s/__GIT_DUMMYNAME__/'"${gitdummyfile}"'/g; p; }' "${rp_this}" 1> "${prefix}/.gitignore"
+                        fi
+                        if [ ! -e "${module_dir}/${gitdummyfile}" ]; then
+                            touch "${module_dir}/${gitdummyfile}"
+                        fi
+                    fi
+                    
+                    if [ ${opt_modreadme:-0} -ne 0 ]; then
+                        if [ ! -e "${prefix}/${readme_name}" ] ; then 
+                            author=
+                            function guess_name () {
+                                local _gitname=$("${GIT:-git}" config --local --get user.name  2>/dev/null || "${GIT:-git}" config --global --get user.name 2>/dev/null)
+                                author="${_gitname:-${USER}}"
+                            }
+                            address=
+                            function guess_email () {
+                                local _gitemail=$("${GIT:-git}" config --local --get user.email  2>/dev/null || "${GIT:-git}" config --global --get user.email 2>/dev/null)
+                                address="${_gitemail:-${USER}@$(hostname -f)}"
+                            }
+                            guess_name
+                            guess_email
+                            
+                            readme_template_header='^#{1,} *__readme_template_start__ *#{1,}.*$'
+                            readme_template_footer='^#{1,} *__readme_template_end__ *#{1,}.*$'
+
+                            awkcmd_add=
+                            if [ "${#subcmd_args[@]}" -gt 0 ]; then
+                                for _i in "${subcmd_args[@]}"; do
+                                    # echo "${_i}" "----------------------"
+                                    script_bn="${_i%.py}"
+                                    if [ "x${script_bn: -1:1}" == "x${py_mjrver}" ]; then
+                                        script_bn_wver="${script_bn}"
+                                        script_bn_wover="${script_bn%${py_mjrver}}"
+                                    else
+                                        script_bn_wver="${script_bn}${py_mjrver}"
+                                        script_bn_wover="${script_bn}"
+                                    fi
+                                    awkcmd_add="${awkcmd_add} printf(\"  %d.  %-36s Example Python script that use modules\n\", ++fidx,\"${script_subdir%/}/${script_bn_wover}.py:\") ;"
+                                    awkcmd_add="${awkcmd_add} printf(\"  %da. %-36s Same as above using python${py_mjrver} as default\n\n\", fidx, \"${script_subdir%/}/${script_bn_wver}.py:\") ;"
+                                    awkcmd_add="${awkcmd_add} printf(\"  %d.  %-36s Symbolic link to '${rp_this##*/}' to invoke ${script_bn_wover}.py.\n\", ++fidx, \"${bin_subdir%/}/${script_bn_wover}:\") ;"
+                                    awkcmd_add="${awkcmd_add} printf(\"  %da. %-36s Same as above using python${py_mjrver} as default\n\n\", fidx, \"${bin_subdir%/}/${script_bn_wver}:\") ;"
+                                done
+                            fi
+                
+                            # selecting readme template & header/footer remove
+                            sed_expression='/'"${readme_template_header}"'/,/'"${readme_template_footer}"'/ { /('"${readme_template_header}"'|'"${readme_template_footer}"')/ d; /^([^@]|$)/ { '
+                            sed_expression="${sed_expression}"' s/__TITLE__/'"${opt_projtitle:-"$(basename "${prefix}")"}"'/g ;'
+                            sed_expression="${sed_expression}"' s/__README_NAME__/'"${readme_name:-README.md}"'/g ;'
+                            sed_expression="${sed_expression}"' s/__AUTHOR_NAME__/'"${author}"'/g;' 
+                            sed_expression="${sed_expression}"' s/__AUTHOR_EMAIL__/'"${address}"'/g;'
+                            sed_expression="${sed_expression}"' s/__MNGSCRIPT_NAME__/'"${module_manage_name}"'/g;'
+                            sed_expression="${sed_expression}"' s/__SHSCRIPT_ENTITY_NAME__/'"$(basename "${rp_this}")"'/g;'
+                            sed_expression="${sed_expression}"' /^.*__SCRIPTNAME__.*$/ d;'
+                            if [ ${opt_git:-0} -eq 0 ]; then
+                                sed_expression="${sed_expression}"' /^.*.gitignore.*$/ d;'
+                                sed_expression="${sed_expression}"' /^.*__GITDUMMYFILE__.*$/ d;'
+                            else
+                                sed_expression="${sed_expression}"' s/__GITDUMMYFILE__/'${gitdummyfile}'/g;'
+                            fi
+                            # output contents and closing readme template selection
+                            sed_expression="${sed_expression}"' p; } ; } ;'
+                    
+                            awkcmd1_header='^#{1,} *__readme_renumbering_awk_start__ *#{1,}.*$'
+                            awkcmd1_footer='^#{1,} *__readme_renumbering_awk_end__ *#{1,}.*$'
+
+                            awk_add_cmd="BEGIN { fidx=0 ; flg_add=0           ; }
+/^ *- *Contents:/,/^ *- *Usage.*:/ { if ( (/.gitignore/ || /^ *- *Usage.*:/ ) && flg_add==0 ) { ${awkcmd_add} flg_add=1 ;} ; if ( /^ +[0-9]+\. / ) { ++fidx; } ; sub(/[0-9]+/, fidx);}
+{print \$0;}
+END {}"
+                             "${SED:-sed}" -nE -e "${sed_expression}" "${rp_this}" \
+                                | "${AWK:-awk}" -f <(echo "${awk_add_cmd}" 2> /dev/null) 2> /dev/null \
+                                | "${AWK:-awk}" -f <("${SED:-sed}" -nE -e '/'"${awkcmd1_header}"'/,/'"${awkcmd1_footer}"'/ {/('"${awkcmd1_header}"'|'"${awkcmd1_footer}"')/ d; p; }' "${rp_this}" 2> /dev/null) \
+                                                1> "${prefix}/${readme_name}"  2> /dev/null
+                            
+                         fi
+                    fi
+                fi
+            else
+                if [ "${#subcmd_args[@]}" -lt 1 ]; then
+                    echo "${runas} add: insufficient subcommand arguments" 1>&2
+                    echo_usage
+                    exit 1
+                fi
+            fi
+
+            if [ "${#subcmd_args[@]}" -gt 0 ]; then
+
+                py_shebang_pattern='^#{1,} *__py_shebang_pattern__ *#{1,}.*$'
+                py_shebang_str='#!/bin/env '"$(basename "${python_cmd}")"
+
+                for _i in "${subcmd_args[@]}" ; do
+
+                    lmtch="$("${GREP:-grep}" -c -Ee '^#{1,} *__'"${_i%.py}"'_template_(start|end)__ *#{1,}.*$' "${rp_this}")"
+                    if [ ${lmtch:-0} -gt 1 ]; then
+                        py_template_header='^#{1,} *__'"${_i%.py}"'_template_start__ *#{1,}.*$'
+                        py_template_footer='^#{1,} *__'"${_i%.py}"'_template_end__ *#{1,}.*$'
+                    else
+                        py_template_header='^#{1,} *__py_template_start__ *#{1,}.*$'
+                        py_template_footer='^#{1,} *__py_template_end__ *#{1,}.*$'
+                    fi
+
+                    script_bn="${_i%.py}"
+                    if [ "x${script_bn: -1:1}" == "x${py_mjrver}" ]; then
+                        script_bn_wver="${script_bn}"
+                        script_bn_wover="${script_bn%${py_mjrver}}"
+                    else
+                        script_bn_wver="${script_bn}${py_mjrver}"
+                        script_bn_wover="${script_bn}"
+                    fi
+                    if [ ${py_mjrver:-3} -eq 3 ]; then
+                        script_bn_file="${script_bn_wver}"
+                        script_bn_link="${script_bn_wover}"
+                    else
+                        script_bn_file="${script_bn_wover}"
+                        script_bn_link="${script_bn_wver}"
+                    fi
+
+                    script_out="${script_bn_file}.py"
+                    if [ ${opt_verbose:-0} -ne 0 ]; then
+                        echo "Making ${script_dir}/${script_out} from template."
+                        echo "${SED:-sed}" -nE -e '/'"${py_template_header}"'/,/'"${py_template_footer}"'/ {/('"${py_template_header}"'|'"${py_template_footer}"')/ d; s:'"${py_shebang_pattern}"':'"${py_shebang_str}"':g; p; }' "${rp_this} 1> \"${script_dir}/${script_out}\""
+                        echo 'if [ \!'" -f \"$(dirname "${script_dir}/${script_out}")/${script_bn_link}.py\" ] ; then"
+                        echo "    (cd \"$(dirname "${script_dir}/${script_out}")\"; ln -s \"$(basename "${script_dir}/${script_out}")\" \"${script_bn_link}.py\")"
+                        echo "fi"
+                        echo "(cd \"${bindir%/}\" && ln -is \"$(basename "${rp_this}")\" \"${script_bn_wver}\" )"
+                        echo 'if [ ${py_mjrver:-3} -eq 3 -a \!'" -f "${bindir%/}/${script_bn_link}" ]; then"
+                        echo "    (cd \"${bindir%/}\" && ln -s \"$(basename "${rp_this}")\" \"${script_bn_link}\" )"
+                        echo "fi"
+                    fi
+                    if [ ${opt_dryrun:-0} -eq 0 ]; then
+                        "${SED:-sed}" -nE -e '/'"${py_template_header}"'/,/'"${py_template_footer}"'/ {/('"${py_template_header}"'|'"${py_template_footer}"')/ d; s:'"${py_shebang_pattern}"':'"${py_shebang_str}"':g; p; }' "${rp_this}" 1> "${script_dir%/}/${script_out}"
+                        if [ ! -f "$(dirname "${script_dir}/${script_out}")/${script_bn_link}.py" ] ; then
+                            (cd "$(dirname "${script_dir}/${script_out}")"; ln -s "$(basename "${script_dir}/${script_out}")" "${script_bn_link}.py")
+                        fi
+                        (cd "${bindir%/}" && ln -is "$(basename "${rp_this}")" "${script_bn_wver}" )
+                        if [ ${py_mjrver:-3} -eq 3 -a ! -f "${bindir%/}/${script_bn_link}" ]; then
+                            (cd "${bindir%/}" && ln -is "$(basename "${rp_this}")" "${script_bn_link}" )
+                        fi
+                    fi
+                done
+
+                if [  "${subcmd}" != "init" -a "${subcmd}" != "setup" -a ${opt_modreadme:-0} -ne 0 -a -e "${prefix}/${readme_name}" ] ; then 
+
+                    sedupdatecmd=""
+                    bin_sbdr="${bin_subdir%/}"
+                    scr_sbdr="${script_subdir%/}"
+
+                    bin_sbdr_esq1="${bin_sbdr//\//\\/}"
+                    scr_sbdr_esq1="${scr_sbdr//\//\\/}"
+
+                    bin_sbdr_esq2="${bin_sbdr//\//\\\\\\/}"
+                    scr_sbdr_esq2="${scr_sbdr//\//\\\\\\/}"
+
+                    for _i in "${subcmd_args[@]}" ; do
+                        _v="${py_mjrver}"
+                        rp_this_spath="$(basename "${rp_this}")"
+
+                        readme_update_awkcmd="BEGIN {
+    idx=0; bmtch=0; bmtchx=0; smtch=0; smtchx=0;
+}
+/- Contents:/,/- Usage.*:/ {
+    if ( \$0 ~ /^ *[0-9]+\. +/ ){  ++idx; } ;
+
+    if ( \$0 ~ /^ *[0-9]+[a-z]+\. +${bin_sbdr_esq1}\/${_i}${_v} *:/ ) { bmtchx=-10; }
+    else if ( \$0 ~ /^ *[0-9]+[a-z]+\. +${bin_sbdr_esq1}\/${_i}[0-9]+ *:/ ) { ++bmtchx; } ;
+
+    if ( \$0 ~  /^ *[0-9]+\. +${bin_sbdr_esq1}\/${_i} *:/ ){ bmtch=-10; };
+
+    if ( \$0 ~ /^ *[0-9]+[a-z]+\. +${scr_sbdr_esq1}\/${_i}${_v}.py *:/ ) { smtchx=-10; }
+    else if ( \$0 ~ /^ *[0-9]+[a-z]+\. +${scr_sbdr_esq1}\/${_i}[0-9]+.py *:/ ) { ++smtchx; } ;
+
+    if ( \$0 ~  /^ *[0-9]+\. +${scr_sbdr_esq1}\/${_i}.py *:.*\$/ ){  smtch=-10; };
+
+}
+END {
+    if ( bmtchx > 0) {
+        printf(\"/^( +)([0-9]+)([a-z])(\\\\\\. +)(${bin_sbdr_esq2}\\\\/)(${_i})([0-9]+) *:/ { h; x ; s/^( +)([0-9]+)([a-z])(\\\\\\. +)(${bin_sbdr_esq2}\\\\/)(${_i})([0-9]+)( *:)/\\\\1\\\\2%x\\\\4\\\\5${_i}${_v}\\\\8/g; s/(python)[0-9]/\\\\1${_v}/ig; x; G; } ; \" , bmtchx+9+1);
+    } else if ( bmtchx == 0 ) {
+        if ( bmtch == 0 ) {
+            printf(\"/- +Usage.*:/ { G; s/^(.*)(\\\\n)(.*)\\\$/  %d.  %-36s Symbolic link to '${rp_this_spath}' to invoke ${_i}.py.\\\\2  %da. %-36s Same as above using python${_v} as default\\\\2\\\\2\\\\1/g ; } ; \", ++idx, \"${bin_sbdr_esq2}\\\\/${_i}:\", idx, \"${bin_sbdr_esq2}\\\\/${_i}${_v}:\" ) ;
+        } else {
+            printf(\"/^ *[0-9]+\\\\\\. +${bin_sbdr_esq2}\\\\/${_i} *:/ { G; s/^( *)([0-9]+)(\\\\\\..*)(\\\\n)(.*)\\\$/\\\\1\\\\2\\\\3\\\\4\\\\5\\\\4  \\\\2a. %-36s Same as above using python${_v} as default\\\\4/g ; }; \", \"${bin_sbdr_esq2}\\\\/${_i}${_v}:\") ;
+        }
+    } else if ( bmtch == 0 ) {
+        printf(\"/^ *[0-9]+[a-z]+\\\\\\. +${bin_sbdr_esq2}\\\\/${_i}${_v} *:/ {G; s/^( *)([0-9]+)([a-z]+\\\\\\..*)(\\\\n)(.*)\\\$/\\\\4  \\\\2. %-36s Symbolic link to '${rp_this_spath}' to invoke ${_i}.py.\\\\4\\\\1\\\\2\\\\3\\\\4\\\\5/g ; } ; \", \"${bin_sbdr_esq2}\\\\/${_i}:\")
+    }   
+
+    if ( smtchx > 0) {
+        printf(\"/^( +)([0-9]+)([a-z])(\\\\\\. +)(${scr_sbdr_esq2}\\\\/)(${_i})([0-9]+).py *:/ { h; x; s/^( +)([0-9]+)([a-z])(\\\\\\. +)(${scr_sbdr_esq2}\\\\/)(${_i})([0-9]+).py( *:)/\\\\1\\\\2%x\\\\4\\\\5${_i}${_v}.py\\\\8/g; s/(python)[0-9]/\\\\1${_v}/ig; x; G;} ; \" , smtchx+9+1);
+    } else if ( smtchx == 0 ) {
+        if ( smtch == 0 ) {
+            printf(\"/- +Usage.*:/ { G; s/^(.*)(\\\\n)(.*)\\\$/  %d.  %-36s  Example Python script that use modules\\\\2  %da. %-36s  Same as above using python${_v} as default\\\\2\\\\2\\\\1/g ; } ; \", ++idx, \"${scr_sbdr_esq2}\\\\/${_i}.py:\", idx, \"${scr_sbdr_esq2}\\\\/${_i}${_v}.py:\") ;
+        } else {
+            printf(\"/^ *[0-9]+\\\\\\. +${scr_sbdr_esq2}\\\\/${_i} *:/ { G; s/^( *)([0-9]+)(\\\\\\..*)(\\\\n)(.*)\\\$/\\\\1\\\\2\\\\3\\\\4\\\\5\\\\4  \\\\2a. %-36s  Same as above using python${_v} as default\\\\4/g ; } ; \", \"${scr_sbdr_esq2}\\\\/${_i}${_v}.py:\") ;
+        }
+    } else if ( smtch == 0 ) {
+        printf(\"/^ *[0-9]+[a-z]+\\\\\\. +${scr_sbdr_esq2}\\\\/${_i}${_v} *:/ {G; s/^( *)([0-9]+)([a-z]+\\\\\\..*)(\\\\n)(.*)\\\$/\\\\4  \\\\2. %-36s  Example Python script that use modules\\\\4\\\\1\\\\2\\\\3\\\\4\\\\5/g ; } ; \", \"${scr_sbdr_esq2}\\\\/${_i}.py:\")
+    }   
+}"
+                        sedupdatecmd="${sedupdatecmd}$("${AWK:-awk}" -f <(echo "${readme_update_awkcmd}")  "${prefix}/${readme_name}" 2> /dev/null)"
+                    done
+
+                    awkcmd1_header='^#{1,} *__readme_renumbering_awk_start__ *#{1,}.*$'
+                    awkcmd1_footer='^#{1,} *__readme_renumbering_awk_end__ *#{1,}.*$'
+                    readme_name_bak="${readme_name%.*}.$("${DATE:-date}" -r "${prefix}/${readme_name}" "+%Y%m%d_%H%M%S").${readme_name##*.}"
+                    mv -i "${prefix}/${readme_name}" "${prefix}/${readme_name_bak}"
+                    "${SED:-sed}" -E -e "/^- *Contents:/,/^- *Usage.*:/ { /^ *$/ {s/^ *$//g; x; s/^.*$//g ; x; h; }; ${sedupdatecmd} }" "${prefix}/${readme_name_bak}" \
+                        | "${AWK:-awk}" -f <("${SED:-sed}" -nE -e '/'"${awkcmd1_header}"'/,/'"${awkcmd1_footer}"'/ {/('"${awkcmd1_header}"'|'"${awkcmd1_footer}"')/ d; p; }' "${rp_this}" 2>/dev/null) \
+                                        1> "${prefix}/${readme_name}"  2> /dev/null
+                    if [ ${opt_keepreadmebak:-0} -eq 0 ]; then
+                        rm "${prefix}/${readme_name_bak}"
+                    fi
+                fi
+            fi
+
+            pipopt="--target ${module_dir%/}/${pip_pyver}"
+            if [ "${#opt_module_install[@]}" -gt 0 ]; then
+                if [ ${opt_verbose:-0} -ne 0 ]; then
+                    echo "install module : ${_i}"
+                    echo "${pip_path} install ${pipopt}" "${opt_module_install[@]}"
+                fi
+                if [ ${opt_dryrun:-0} -eq 0 ]; then
+                    "${pip_path}" install ${pipopt} "${opt_module_install[@]}"
+                fi
+            fi
+            ;;
+        install|download)
+            if [ "${subcmd}" == "install" ]; then
+                pipopt="--target ${module_dir%/}/${pip_pyver}"
+            else
+                pipopt="--dest ${module_dir%/}/${pip_pyver}"
+            fi
+            if [ ${opt_verbose:-0} -ne 0 ]; then
+                echo "${subcmd} module : $@"
+                echo "${pip_path} ${subcmd} ${pipopt} ${@}"
+            fi
+            if [ ${opt_dryrun:-0} -eq 0 ]; then
+                "${pip_path}" ${subcmd} ${pipopt} "${@}"
+            fi
+            exit
+            ;;
+        clean)
+            if [ ${opt_verbose:-0} -ne 0 ]; then
+                echo "Clean"
+                echo "exec rm -rf \"${@}\" \"${module_dir%/}/${pip_pyver%/}\""
+            fi
+            if [ ${opt_dryrun:-0} -eq 0 ]; then
+                exec rm -rf "${@}" "${module_dir%/}/${pip_pyver%/}"
+            fi
+            ;;
+        distclean|allclean|cleanall)
+            if [ ${opt_verbose:-0} -ne 0 ]; then
+                echo "Distclean"
+                echo "exec rm -rf \"${@}\" \"${module_dir}\"/\*"
+            fi
+            if [ ${opt_dryrun:-0} -eq 0 ]; then
+                exec rm -rf "${@}" "${module_dir}"/*
+            fi
+            ;;
+
+        info)
+            echo "Python command         : " ${python_cmd}
+            echo "Python full path       : " ${python_path}
+            echo "Top of work directory  : " ${prefix}
+            echo "bin directory          : " ${bindir}
+            echo "script directory       : " ${script_dir}
+            echo "python moule directory : " ${module_dir}
+            echo "PIP command            : " ${pip_cmd}
+            echo "PIP full path          : " ${pip_path}
+            ;;
+        *)
+            echo "Unknown sub-command: ${subcommand}"
+            echo_usage
+            exit 1
+            ;;
+    esac
+    exit
+else
+
+    bindir="${prefix%/}/${bin_subdir%/}"
+    script_dir="${prefix%/}/${script_subdir%/}"
+    module_dir="${script_dir%/}/${module_subdir%/}"
+
+    script_path=
+    if [ ${flgslnk:-0} -ne 0 ]; then
+        # Script name is symboric name
+        for script in "${runas%.py}".py "${runas}" ; do
+            script_path="${script_dir}/${script}"
+            if [ -f "${script_path}" ]; then
+                break
+            fi
+            script_path=
+        done
+        if [ -z "${script_path}" ]; then
+            exec echo "Error: File not found. (${runas%.py}\{.py\} is not in ${script_dir})" 1>&2
+        fi
+    elif [ $# -gt 0 ]; then
+        script="$(basename ${1%.py}).py"
+        shift
+        if [ -f "${script}" ]; then
+            script_path="${script}"
+        elif [ "x${script:0:1}" != "x/" -a -f "${script_dir}/${script}" ]; then
+            script_path="${script_dir}/${script}"
+        else
+            exec echo "Error: File not found. (${script} is not in ${script_dir})" 1>&2
+        fi
+    else
+        exec echo "[Usage] % ${runas} python_script [arguments ... ]" 1>&2
+    fi
+
+    #
+    # Check shebang
+    #
+    py_script=$("${SED:-sed}" -nE -e '1 {/^#\!/ s/^#\!((\/usr)?(\/bin\/)?env  *)?((.*)python(-?([0-9\.][0-9\.]*))?)(  *[^ ].*)?$/\4/gp;};q' "${script_path}")
+    py_scrver=$("${SED:-sed}" -nE -e '1 {/^#\!/ s/^#\!((\/usr)?(\/bin\/)?env  *)?((.*)python(-?([0-9\.][0-9\.]*))?)(  *[^ ].*)?$/\7/gp;};q' "${script_path}")
+
+    if [ -z "${py_scrver}" ] ; then
+        py_mjrver=${python_major_version_default:-3}
+    elif [ "${py_scrver%%.*}" -eq 3 ]; then
+        py_mjrver=3
+    elif [ "${py_scrver%%.*}" -eq 2 ]; then
+        py_mjrver=2
+    else
+        py_mjrver=${python_major_version_default:-3}
+    fi
+
+    if [ -n "${py_mjrver}" ] && command -v "${PYTHON:-${py_script:-python${py_mjrver}}}" 1>/dev/null 2>&1 ; then
+        python_path="$(command -v  "${PYTHON:-${py_script:-python${py_mjrver}}}")"
+        python_pyver="$("${python_path}" -c "import sys;print('%d.%d' % sys.version_info[0:2])")"
+    elif command -v "${PYTHON:-${py_script:-python}}"  1>/dev/null 2>&1 ; then
+        python_path="$(command -v  "${PYTHON:-${py_script:-python}}")"
+        python_pyver="$("${python_path}" -c "import sys;print('%d.%d' % sys.version_info[0:2])")"
+    else
+        exec echo "Can not find ${PYTHON:-${py_script:-python${py_mjrver}}} installed"
+    fi
+
+    if [ -n "${py_scrver}" ] && [ "${py_scrver%%.*}" -ne "${python_pyver%%.*}" ]; then
+        echo "Warning: Python version (${python_pyver}) mismatch?  (Version ${py_scrver%%.*}) is expexted by ${script_path})" 2>&1
+    fi
+
+    exec env PATH="${script_dir%/}/${python_pyver}:${script_dir%/}:${module_dir%/}/${python_pyver}/bin:${bin_dir}:${PATH}" \
+         PYTHONPATH="${script_dir%/}/${python_pyver}:${script_dir%/}:${module_dir%/}/${python_pyver}:${PYTHONPATH}" \
+         "${python_path}" "${script_path}" "${@}"
+fi
+
+exit
+
+########## __readme_renumbering_awk_start__ ##########
+function idx2str ( idx0 ) {
+    base=26 ; chr_offset=97 ;
+    offset=0 ; factor=1 ; ostr="" ;
+    do {
+        digit = ((idx0-offset)/factor) % base ;
+        ostr=sprintf("%c%s", digit+chr_offset,ostr) ;
+        offset+=factor*base ;
+        factor*=base ;
+    } while ( idx0 >= offset )
+    return ostr;
+}
+BEGIN {
+    wn=0; wi=0; ln=0; idx=0; sidx=0;
+}
+/^ *- *Contents:/,/^ *- *Usage.*:/ {
+    if ( $0 ~ /^ *[0-9]+\. +/       ) {
+        ++idx ;
+        sidx=0 ;
+        sub("[0-9]+\.", sprintf("%d.", idx), $0) ;
+    }
+    if ( $0 ~ /^ *[0-9]+[a-z]+\. +/ ) { 
+        sub("[0-9]+[a-z]+\.", sprintf("%d%s.", idx, idx2str(sidx)), $0);
+        ++sidx ;
+    }
+    if ( match($0, /^ *[0-9]+[a-z]*\. *[^ ].*: */) ) {
+        l_dsc_tail = length($0);
+        l_dsc = l_dsc_tail-RLENGTH
+        match($0, /^ *[0-9]+[a-z]*\. *[^ ].*:/);
+        l_itm_tail=RLENGTH;
+        match($0, /^ *[0-9]+[a-z]*\. */)
+        l_itm = l_itm_tail-RLENGTH
+        match($0, /^ *[0-9]+[a-z]*\./);
+        l_idx_tail=RLENGTH;
+        match($0, /^ */);
+        l_idx=l_idx_tail-RLENGTH
+        if ( l_idx > wn ) {
+            wn = l_idx
+        }
+        if ( l_itm > wi ) {
+            wi = l_itm
+        } 
+    }
+} 
+{ buf[ln++] = $0 ; }
+END {
+    roi=0;
+    for(i=0;i<ln;++i){
+        if (match(buf[i], /^ *- *Contents:/ ) ){
+            roi=1;
+        } else if ( match(buf[i], /^ *- *Usage.*:/  ) ){
+            roi=0;
+        } else if ( roi!=0 && match(buf[i], /^ *[0-9]+[a-z]*\. *[^ ].*: */) ) {
+            l_dsc_tail = length(buf[i]);
+            l_dsc = l_dsc_tail-RLENGTH
+            dsc=sprintf("%s", substr(buf[i], RLENGTH+1, l_dsc));
+            match(buf[i], /^ *[0-9]+[a-z]*\. *[^ ].*:/);
+            l_itm_tail=RLENGTH;
+            match(buf[i], /^ *[0-9]+[a-z]*\. */)
+            l_itm = l_itm_tail-RLENGTH
+            itm=sprintf("%s", substr(buf[i], RLENGTH+1, l_itm));
+            match(buf[i], /^ *[0-9]+[a-z]*\./);
+            l_idx_tail=RLENGTH;
+            match(buf[i], /^ */);
+            l_idx=l_idx_tail-RLENGTH
+            idx=sprintf("%s", substr(buf[i], RLENGTH+1, l_idx));
+            sub(/[^ ].*$/, sprintf("%-*s %-*s %s", wn, idx, wi, itm, dsc), buf[i]);
+        }
+        print buf[i];
+    }
+}
+########## __readme_renumbering_awk_end__ ##########
+
+########## __readme_template_start__ ##########
+#
+# __TITLE__
+#
+
+Skeleton for small portable tools by python script
+
+- Contents:
+
+  1.  __README_NAME__:                           This file
+  2.  bin/__MNGSCRIPT_NAME__:                       Symblic link to '__SHSCRIPT_ENTITY_NAME__' for installing Python modules by pip locally.
+  2a. bin/__MNGSCRIPT_NAME__2:                      Same as above using pip2 as default
+  2b. bin/__MNGSCRIPT_NAME__3:                      Same as above using pip3 as default
+
+  3.  bin/__SHSCRIPT_ENTITY_NAME__:                    Wrapper bash script to invoke Python script. (Entity)
+
+  4.  lib/python/site-packages:            Directory where python modules are stored
+
+  5.  lib/python/__SCRIPTNAME__.py:         Example Python script that use modules
+  5a. lib/python/__SCRIPTNAME__2.py:        Same as above using python2 as default
+  5b. lib/python/__SCRIPTNAME__3.py:        Same as above using python3 as default
+@
+  6.  bin/__SCRIPTNAME__:                   Symbolic link to '__SHSCRIPT_ENTITY_NAME__' to invoke __SCRIPTNAME__.py.
+  6a. bin/__SCRIPTNAME__2:                  Same as above using python2 as default
+  6b. bin/__SCRIPTNAME__3:                  Same as above using python3 as default
+@
+  7.  .gitignore:                          Git-related file
+  8.  lib/python/site-packages/__GITDUMMYFILE__:   Git-related file to keep modules directory in repository.
+  
+- Usage (Procedure for adding new script):
+
+  1. Put new script under 'lib/python'.
+
+     Example: 'lib/python/{newscriptname}.py'
+
+  2. Make symbolic link to 'bin/__SHSCRIPT_ENTITY_NAME__' with same basename as the
+     basename of new script.
+
+      Example: 'bin/{newscriptname}' --> __SHSCRIPT_ENTITY_NAME__
+
+  3. Download external python module by './bin/__MNGSCRIPT_NAME__'
+
+      Example: 'lib/python/{newscriptname}.py' uses modules, pytz and tzlocal.
+
+      % ./bin/__MNGSCRIPT_NAME__ pytz tzlocal
+
+      To install python module by specifying python/pip version,
+      invoke '__MNGSCRIPT_NAME__2' or '__MNGSCRIPT_NAME__3'.
+
+  4. Invoke the symbolic link made in step.2 for execute the script.
+
+      % ./bin/{newscriptname}
+
+- Caution:
+
+  - Do not put python scripts/modules that are not managed by pip
+    under 'lib/python/site-packages'.
+
+    Otherwise those scripts/modules will be removed by
+    `./bin/__MNGSCRIPT_NAME__ distclean`
+
+- Note:
+
+  - Python executable is seeked by the following order.
+
+    1. Environmental variable: PYTHON
+    2. Shebang in called python script
+    3. python3 in PATH
+    4. python  in PATH
+
+    If you want to use python2 in prior instead of python3,
+    change the value of shell variable \$\{python_major_version_default\}
+    at the beginning of "__SHSCRIPT_ENTITY_NAME__"
+
+    In other examples ({newscriptname}2.py, {newscriptname}3.py) are
+    specifying the python version at the shebang (1st-line).
+    It can be override by Environmental variable: PYTHON.
+
+  - pip command is seeked by the following order.
+
+    1. Environmental variable: PIP
+    2. pip2 in PATH for "__MNGSCRIPT_NAME__2"
+       pip3 in PATH for "__MNGSCRIPT_NAME__3"
+    3. pip3 in PATH
+    4. pip  in PATH
+
+    If you want to use pip2 in prior instead of pip3 by "__MNGSCRIPT_NAME__",
+    change the value of shell variable ${python_major_version_default}
+    at the beginning of "__SHSCRIPT_ENTITY_NAME__"
+
+- Requirements (Tools used in "__SHSCRIPT_ENTITY_NAME__")
+
+  - bash
+  - grep
+  - sed
+  - awk
+  - GNU realpath (in GNU coreutils)
+  - Python, PIP
+
+- Author
+
+  - __AUTHOR_NAME__ (__AUTHOR_EMAIL__)
+
+########## __readme_template_end__ ##########
+
+########## __gitignore_template_start__ ##########
+# .gitignore
+*.py[cod]
+*$py.class
+# For emacs backup file
+*~
+lib/python/site-packages/*
+!__GIT_DUMMYNAME__
+########## __gitignore_template_end__ ##########
+
+######################################################################
+#                                                                    #
+#           Main python script template                              #
+#                                                                    #
+######################################################################
+
+########## __py_template_start__ ##########
+## __py_shebang_pattern__ ##
+# -*- coding: utf-8 -*-
+
+import argparse
+import datetime
+import sys
+
+import pytz
+import tzlocal
+
+def main():
+    """
+    Example code skeleton: Just greeting
+    """
+    argpsr = argparse.ArgumentParser(description='Example: showing greeting words')
+    argpsr.add_argument('name', nargs='*', type=str, default=['World'],  help='your name')
+    argpsr.add_argument('-d', '--date', action='store_true', help='Show current date & time')
+    args = argpsr.parse_args()
+    if args.date:
+        tz_local = tzlocal.get_localzone()
+        datestr  = datetime.datetime.now(tz=tz_local).strftime(" It is \"%c.\"")
+    else:
+        datestr = ''
+
+    print("Hello, %s!%s" % (' '.join(args.name), datestr))
+    print("Python : %d.%d.%d " % sys.version_info[0:3]+ "(%s)" % sys.executable)
+    hdr_str = "Python path: "
+    for i,p in enumerate(sys.path):
+        print("%-2d : %s" % (i+1, p))
+        hdr_str = ""
+
+if __name__ == '__main__':
+    main()
+
+########## __py_template_end__ ##########
+
+#######################################################################
+##
+## Optional python template;
+##     Example of named template to contain multiple python tamplate.
+##
+##   If there is the line with '########## __{scriptname}_template_start__ ##########'
+## and the line with '########## __{scriptname}_template_end__ ##########'
+## where '{scriptname}' is arguments for 'init' or 'add' sub-command,
+## the interval of these lines is used for the script template.
+##
+## This can be used to distribute multiple python scripts at once as follows.
+##
+## % runpyscr --manage -p /destination -g -r -t 'Project name' -3 -m pytz -m tzlocal init scriptA scriptB
+##
+########### __scriptA_template_start__ ##########
+### __py_shebang_pattern__ ##
+## -*- coding: utf-8 -*-
+#import datetime
+#import sys
+#
+#import pytz
+#import tzlocal
+#
+#def main():
+#    """
+#    Example code skeleton: Script-A
+#    """
+#    tz_local = tzlocal.get_localzone()
+#    datestr  = datetime.datetime.now(tz=tz_local).strftime(" It is \"%c.\"")
+#    print("Hello, This is Script-A : %s" % (datestr))
+#    print("Python : %d.%d.%d " % sys.version_info[0:3]+ "(%s)" % sys.executable)
+#    hdr_str = "Python path: "
+#    for i,p in enumerate(sys.path):
+#        print("%-2d : %s" % (i+1, p))
+#        hdr_str = ""
+#if __name__ == '__main__':
+#    main()
+########### __scriptA_template_end__ ##########
+#
+########### __scriptB_template_start__ ##########
+### __py_shebang_pattern__ ##
+## -*- coding: utf-8 -*-
+#import datetime
+#import sys
+#
+#import pytz
+#import tzlocal
+#
+#def main():
+#    """
+#    Example code skeleton: Script-B
+#    """
+#    tz_local = tzlocal.get_localzone()
+#    datestr  = datetime.datetime.now(tz=tz_local).strftime(" It is \"%c.\"")
+#    print("Hello, This is Script-B : %s" % (datestr))
+#    print("Python : %d.%d.%d " % sys.version_info[0:3]+ "(%s)" % sys.executable)
+#    hdr_str = "Python path: "
+#    for i,p in enumerate(sys.path):
+#        print("%-2d : %s" % (i+1, p))
+#        hdr_str = ""
+#if __name__ == '__main__':
+#    main()
+########### __scriptB_template_end__ ##########
